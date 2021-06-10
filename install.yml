@@ -1,0 +1,11 @@
+---
+- name: sonos
+  hosts: localhost
+  gather_facts: no
+  connection: local
+
+  tasks:
+    - name: "Install SoCo"
+      pip:
+        name: soco
+        executable: pip3

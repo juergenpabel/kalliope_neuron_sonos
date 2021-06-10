@@ -1,0 +1,10 @@
+---
+name: "sonos"
+type: "neuron"
+author: "juergenpabel"
+
+kalliope_supported_version:
+  - 0.7
+tags:
+  - "sonos"
+  - "neuron"
