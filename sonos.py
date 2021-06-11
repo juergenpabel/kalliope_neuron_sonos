@@ -7,6 +7,7 @@ from ipaddress import *
 from difflib import SequenceMatcher
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import TimeoutError
+from ast import literal_eval
 
 from soco import *
 from soco.data_structures import *
@@ -111,7 +112,10 @@ class Sonos(NeuronModule):
             raise SonosException("Could not initialize sonos neuron with ipv4='%s' and room='%s', " % (ipv4, room))
 
         self.klass.household['configured-rooms'] = dict()
-        for name, members in kwargs.get('rooms', dict()).items():
+        rooms = kwargs.get('rooms', dict())
+        if isinstance(rooms, str):
+            rooms = literal_eval(rooms)
+        for name, members in rooms.items():
             if isinstance(members, list):
                 self.klass.household['configured-rooms'][name] = members
             elif isinstance(members, str):
