@@ -9,11 +9,12 @@ from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import TimeoutError
 from ast import literal_eval
 
-from soco import *
-from soco.data_structures import *
-from soco.music_library import MusicLibrary
+from soco import SoCo
+from soco.groups import ZoneGroup
 from soco.discovery import by_name as SoCo_ByName
+from soco.music_library import MusicLibrary
 from soco.exceptions import SoCoException
+from soco.data_structures import *
 from kalliope.core.NeuronModule import NeuronModule, MissingParameterException, InvalidParameterException
 from kalliope.core.NeuronExceptions import NeuronExceptions
 from kalliope.core.Utils.Utils import Utils
@@ -74,7 +75,7 @@ class Sonos(NeuronModule):
         room = kwargs.get('room', None)
         if self.action == "init":
             if room is None:
-                raise InvalidParameterException("You must specify a valid sonos zone/group name for 'room' in init action")
+                raise InvalidParameterException("You must specify a valid sonos zone name for 'room' in init action")
             if ipv4 is not None:
                 try:
                     if IPv4Address(ipv4).is_global:
@@ -100,11 +101,9 @@ class Sonos(NeuronModule):
             logger.debug("[sonos] instantiating SoCo using IP address")
             try:
                 soco = SoCo(ipv4)
-                if soco.is_coordinator is True:
-                    self.klass.soco = soco
-                else:
-                    Utils.print_warning("[sonos] SONOS with ipv4='%s' is no coordinator, using group coordinator" % ipv4)
-                    self.klass.soco = soco.group.coordinator
+                if soco.is_visible is False:
+                    raise SonosException("SONOS with ipv4='%s' is no coordinator, maybe slave in stereo pair? (you should probably use ipv4='%s')" % (ipv4,soco.group.coordinator.ip_address))
+                self.klass.soco = soco
             except (ConnectTimeout, TimeoutError, SoCoException) as e:
                 raise SonosException("Failure while trying to communicate with SONOS (%s)" % e.__class__.__name__)
 
@@ -134,27 +133,41 @@ class Sonos(NeuronModule):
         item = kwargs.get('item', None)
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
 
+        logger.debug("[sonos] configuring room '%s' in SONOS" % (room))
         soco = self.klass.household['rooms'][room][0] # first entry in list is assumed target
+        logger.debug("[sonos] using SoCo(%s) as coordinator for room '%s'" % (soco.ip_address, room))
+        soco.unjoin()
+        for player in self.klass.household['rooms'][room][1:]:
+            try:
+                if player.group.coordinator != player:
+                    logger.debug("[sonos] unjoining SoCo(%s) from '%s'" % (player.ip_address, player.group.label))
+                    player.unjoin()
+                logger.debug("[sonos] joining SoCo(%s) to room '%s'" % (player.ip_address, room))
+                player.join(soco)
+            except (ConnectTimeout, TimeoutError, SoCoException) as e:
+                Utils.print_warning("Failure while trying to communicate with SONOS (%s)" % e.__class__.__name__)
         if item is not None:
             results = dict()
             for favorite in self.klass.household['favorites']:
                 ratio = SequenceMatcher(None, item, favorite).ratio()
                 results[ratio] = favorite
-            result = sorted(results.keys(), reverse=True)[0]
-            result = results[result]
+            result = sorted(results.keys(), reverse=True)[0] # get highest score
+            result = results[result] # get best match
+            logger.debug("[sonos] playing '%s' from favorites in room '%s'" % (result, room))
             soco.clear_queue()
             soco.add_to_queue(self.klass.household['favorites'][result])
             soco.play_from_queue(0)
         else:
+            logger.debug("[sonos] playing queue in room '%s'" % (result, room))
             soco.play()
 
 
     def do_pause(self, **kwargs):
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
         soco = self.klass.household['rooms'][room][0]
         soco.pause()
 
@@ -162,7 +175,7 @@ class Sonos(NeuronModule):
     def do_next(self, **kwargs):
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
         soco = self.klass.household['rooms'][room][0]
         soco.next()
 
@@ -170,7 +183,7 @@ class Sonos(NeuronModule):
     def do_prev(self, **kwargs):
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
         soco = self.klass.household['rooms'][room][0]
         soco.previous()
 
@@ -178,7 +191,7 @@ class Sonos(NeuronModule):
     def do_mute(self, **kwargs):
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
         soco = self.klass.household['rooms'][room][0]
         soco.mute = True
 
@@ -186,7 +199,7 @@ class Sonos(NeuronModule):
     def do_unmute(self, **kwargs):
         room = kwargs.get('room', self.klass.household['room'])
         if room not in self.klass.household['rooms']:
-            raise InvalidParameterException("the value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
+            raise InvalidParameterException("The value '%s' is invalid for parameter 'room' in action '%s'" % (room, self.action))
         soco = self.klass.household['rooms'][room][0]
         soco.mute = False
 
@@ -194,37 +207,36 @@ class Sonos(NeuronModule):
     def do_sync(self, **kwargs):
         self.klass.household['rooms'] = dict()
         try:
-            for group in self.klass.soco.all_groups:
+            for player in self.klass.soco.visible_zones:
                 try:
-                    for member in group.members:
-                        if member.is_visible:
-                            logger.debug("[sonos] assigning SoCo(%s) to room '%s'" % (member.ip_address, member.player_name))
-                            self.klass.household['rooms'][member.player_name] = [member]
-                except (ConnectTimeout, TimeoutError, SoCoException) as e:
-                    Utils.print_warning("exception, failed to add group '%s' to rooms" % (group.coordinator.ip_address))
+                    if isinstance(player, ZoneGroup):
+                        player = player.coordinator
+                    logger.debug("[sonos] assigning SoCo(%s) to room '%s'" % (player.ip_address, player.player_name))
+                    self.klass.household['rooms'][player.player_name] = [player]
+                except (ConnectTimeout, TimeoutError) as e:
+                    Utils.print_warning("[sonos] failed to add SoCo(%s) due to a timeout (player offline?)" % (player.ip_address))
         except (ConnectTimeout, TimeoutError, SoCoException) as e:
             Utils.print_warning("[sonos] error communicating with SONOS (offline?): %s" % (str(e)))
 
         if self.klass.household['rooms']:
             try:
                 for room in self.klass.household['configured-rooms']:
-                    logger.debug("[sonos] merging pre-configured room '%s'" % (room))
+                    logger.debug("[sonos] creating (virtual) room '%s'" % (room))
                     if room not in self.klass.household['rooms']:
                         self.klass.household['rooms'][room] = list()
                         for member in self.klass.household['configured-rooms'][room]:
                             if member in self.klass.household['rooms']:
                                 soco = self.klass.household['rooms'][member][0] ## first entry is assumed coordinator
-                                logger.debug("[sonos] assigning SoCo(%s) to room '%s'" % (soco.ip_address, room))
+                                logger.debug("[sonos] assigning SoCo(%s) to (virtual) room '%s'" % (soco.ip_address, room))
                                 self.klass.household['rooms'][room].extend(self.klass.household['rooms'][member])
                             else:
-                                Utils.print_warning("[sonos] non-existing room '%s' in rooms settings" % (member.label))
+                                Utils.print_warning("[sonos] unknown member '%s' referenced in (virtual) room '%s'" % (member.label, room))
                     else:
-                        Utils.print_warning("[sonos] room '%s' (from rooms settings) already defined in SONOS, ignoring" % (room))
+                        Utils.print_warning("[sonos] (virtual) room '%s' (from settings) already exists in SONOS, ignoring" % (room))
             except (BaseException, ConnectTimeout, TimeoutError, SoCoException) as e:
-                Utils.print_warning("[sonos] error while merging defined rooms from settings: %s" % (str(e)))
+                Utils.print_warning("[sonos] error while merging (virtual) rooms from settings: %s" % (str(e)))
             finally:
                 SettingEditor.set_variables({'sonos_rooms': {k.lower(): k for k, v in self.klass.household['rooms'].items()}})
-
         self.klass.household['favorites'] = dict()
         try:
             for favorite in MusicLibrary(self.klass.soco).get_sonos_favorites():
@@ -232,7 +244,7 @@ class Sonos(NeuronModule):
         except (ConnectTimeout, TimeoutError, SoCoException) as e:
             Utils.print_warning("[sonos] error while retrieving favorites from sonos: %s" % (str(e)))
         finally:
-            logger.debug("[sonos] adding favorites by title as kalliope global variables (sonos_favorites[title])")
+            logger.debug("[sonos] adding favorites by title as kalliope global variables (sonos_favorites[title]): %s" % self.klass.household['favorites'].keys())
             SettingEditor.set_variables({'sonos_favorites': {k.lower(): k for k, v in self.klass.household['favorites'].items()}})
         Utils.print_success("[sonos] syncing with SONOS successful")
 
